@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  --bg-terminal: #06090e;
+  --bg-panel: #0b1017;
+  --bg-panel-alt: #101722;
+  --border-terminal: #1e293b;
+  --amber-terminal: #f59e0b;
+  --green-terminal: #10b981;
+  --red-terminal: #ef4444;
+  --cyan-terminal: #06b6d4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg-terminal);
+  color: #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  overflow-x: hidden;
+  background-image: 
+    linear-gradient(rgba(16, 24, 39, 0.35) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 24, 39, 0.35) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-ticker {
+  display: flex;
+  width: max-content;
+  animation: marquee 48s linear infinite;
+}
+
+.animate-ticker:hover {
+  animation-play-state: paused;
+}
+
+/* Custom terminal scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #06090e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #f59e0b;
+}
