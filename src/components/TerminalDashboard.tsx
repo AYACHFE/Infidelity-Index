@@ -2,38 +2,15 @@
 
 import React, { useState, useMemo } from 'react';
 import type { ScandalRecord, PrRedFlag, CommunityTip, StockPoint } from '@/lib/db';
-import {
-  Activity,
-  AlertTriangle,
-  Award,
-  BarChart3,
-  Building2,
-  Calendar,
-  CheckCircle2,
-  Copy,
-  Database,
-  DollarSign,
-  Eye,
-  FileText,
-  Filter,
-  Flame,
-  Gavel,
-  Lock,
-  PlusCircle,
-  Receipt,
-  Scale,
-  Search,
-  ShieldAlert,
-  TrendingDown,
-  TrendingUp,
-  Users,
-} from 'lucide-react';
 
 interface Props {
   initialScandals: ScandalRecord[];
   initialRedFlags: PrRedFlag[];
   initialTips: CommunityTip[];
 }
+
+type TabId = 'INDEX' | 'ALPHA' | 'INSIGHTS' | 'SUBMIT';
+type QuickFilter = 'ALL' | 'BILLIONAIRES' | 'CLAWBACKS' | 'RECENT' | 'VIRAL';
 
 export default function TerminalDashboard({
   initialScandals,
@@ -44,30 +21,25 @@ export default function TerminalDashboard({
   const [redFlags] = useState<PrRedFlag[]>(initialRedFlags);
   const [tips, setTips] = useState<CommunityTip[]>(initialTips);
 
-  // Navigation / view mode
-  const [activeTab, setActiveTab] = useState<
-    'ALL' | 'INDEX' | 'ALPHA' | 'ANALYTICS' | 'VIRAL' | 'SUBMIT'
-  >('ALL');
-
-  // Filters for Leaderboard
-  const [selectedYear, setSelectedYear] = useState<string>('ALL');
-  const [selectedSector, setSelectedSector] = useState<string>('ALL');
-  const [selectedTier, setSelectedTier] = useState<string>('ALL');
+  // Focused 4-tab navigation (defaults to clean Index + Dossier view)
+  const [activeTab, setActiveTab] = useState<TabId>('INDEX');
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Currently inspected scandal for Dossier, Stock Chart & Receipt Generator
+  // Selected scandal for the right-hand Dossier
   const [selectedScandalId, setSelectedScandalId] = useState<number>(
     initialScandals[0]?.id ?? 1
   );
+
+  // Modal receipt state
+  const [showReceiptModal, setShowReceiptModal] = useState<boolean>(false);
+  const [copiedReceipt, setCopiedReceipt] = useState<boolean>(false);
 
   // ETF Simulator state
   const [etfCapital, setEtfCapital] = useState<number>(10000);
   const [etfStrategy, setEtfStrategy] = useState<'SHORT_CHEATERS' | 'LONG_CHEATERS'>(
     'SHORT_CHEATERS'
   );
-
-  // Receipt copy feedback
-  const [copiedReceipt, setCopiedReceipt] = useState<boolean>(false);
 
   // Community Tip Form state
   const [tipForm, setTipForm] = useState({
@@ -76,7 +48,7 @@ export default function TerminalDashboard({
     executive_name: '',
     role: 'CEO',
     incident_date: '2026-11-09',
-    evidence_tier: 'REPORTED_MAJOR_MEDIA',
+    evidence_tier: 'CONFIRMED_OFFICIAL',
     source_url: '',
     notes: '',
   });
@@ -88,103 +60,125 @@ export default function TerminalDashboard({
     [scandals, selectedScandalId]
   );
 
-  // Days Since Last Scandal calculation
-  const daysSinceLastScandal = useMemo(() => {
-    if (!scandals.length) return 0;
-    const latestDateStr = scandals.reduce(
-      (max, s) => (s.incident_date > max ? s.incident_date : max),
-      scandals[0].incident_date
-    );
-    const latest = new Date(latestDateStr).getTime();
-    const now = new Date('2026-11-09T17:42:33Z').getTime();
-    const diff = Math.max(0, Math.floor((now - latest) / (1000 * 60 * 60 * 24)));
-    return diff;
-  }, [scandals]);
+  // Format financial impact cleanly (Clawback vs Divorce Settlement)
+  const formatFinancialCost = (s: ScandalRecord) => {
+    if (s.parachute_or_clawback_millions < 0) {
+      return {
+        label: `-$${Math.abs(s.parachute_or_clawback_millions)}M Clawback`,
+        short: `-$${Math.abs(s.parachute_or_clawback_millions)}M`,
+        type: 'clawback' as const,
+      };
+    }
+    if (s.divorce_or_settlement_millions >= 1000) {
+      return {
+        label: `$${(s.divorce_or_settlement_millions / 1000).toFixed(1)}B Divorce Split`,
+        short: `$${(s.divorce_or_settlement_millions / 1000).toFixed(1)}B Div`,
+        type: 'divorce' as const,
+      };
+    }
+    if (s.divorce_or_settlement_millions > 0) {
+      return {
+        label: `$${s.divorce_or_settlement_millions}M Settlement`,
+        short: `$${s.divorce_or_settlement_millions}M`,
+        type: 'settlement' as const,
+      };
+    }
+    return {
+      label: 'Forfeited Bonus / Exit',
+      short: 'Ousted',
+      type: 'none' as const,
+    };
+  };
 
-  // Filtered scandals
+  // Filtered list based on 1-click pills + search bar
   const filteredScandals = useMemo(() => {
     return scandals.filter((s) => {
-      if (selectedYear !== 'ALL' && String(s.year) !== selectedYear) return false;
-      if (selectedSector !== 'ALL' && s.sector !== selectedSector) return false;
-      if (selectedTier !== 'ALL' && s.evidence_tier !== selectedTier) return false;
+      if (quickFilter === 'BILLIONAIRES' && s.divorce_or_settlement_millions < 500) {
+        return false;
+      }
+      if (quickFilter === 'CLAWBACKS' && s.parachute_or_clawback_millions >= 0) {
+        return false;
+      }
+      if (quickFilter === 'RECENT' && s.year < 2023) {
+        return false;
+      }
+      if (
+        quickFilter === 'VIRAL' &&
+        !['ASTR-PVT', 'TRY-PVT', 'AMZN', 'MSFT', 'MCD', 'TKO'].includes(s.ticker)
+      ) {
+        return false;
+      }
       if (searchQuery.trim() !== '') {
         const q = searchQuery.toLowerCase();
-        const match =
+        return (
           s.company_name.toLowerCase().includes(q) ||
           s.ticker.toLowerCase().includes(q) ||
           s.executive_name.toLowerCase().includes(q) ||
-          s.sector.toLowerCase().includes(q);
-        if (!match) return false;
+          s.sector.toLowerCase().includes(q)
+        );
       }
       return true;
     });
-  }, [scandals, selectedYear, selectedSector, selectedTier, searchQuery]);
+  }, [scandals, quickFilter, searchQuery]);
 
-  // Aggregate Macro KPIs
-  const macroStats = useMemo(() => {
-    const total = scandals.length;
-    const avgScore =
-      scandals.reduce((acc, s) => acc + s.unfaithfulness_score, 0) / (total || 1);
-    const avgT90 =
-      scandals.reduce((acc, s) => acc + s.stock_impact_t90_after, 0) / (total || 1);
-    const totalClawbackMillions = scandals.reduce(
+  // Core summary stats (kept to 4 high-impact numbers)
+  const summaryStats = useMemo(() => {
+    const totalClawbacks = scandals.reduce(
       (acc, s) => acc + Math.abs(Math.min(0, s.parachute_or_clawback_millions)),
       0
     );
-    const secCorrelatedCount = scandals.filter(
-      (s) => s.sec_or_fraud_correlation === 1
-    ).length;
-    const subordinateCount = scandals.filter(
-      (s) => s.involved_subordinate === 1
-    ).length;
-    const avgTenure =
-      scandals.reduce((acc, s) => acc + s.tenure_years, 0) / (total || 1);
-    const avgAge =
-      scandals.reduce((acc, s) => acc + s.exec_age, 0) / (total || 1);
-
+    const totalDivorceBillions =
+      scandals.reduce((acc, s) => acc + s.divorce_or_settlement_millions, 0) / 1000;
+    const subordinatePct = Math.round(
+      (scandals.filter((s) => s.involved_subordinate === 1).length /
+        (scandals.length || 1)) *
+        100
+    );
+    const oustedPct = Math.round(
+      (scandals.filter((s) => !s.consequence.includes('Kept Job')).length /
+        (scandals.length || 1)) *
+        100
+    );
     return {
-      total,
-      avgScore: avgScore.toFixed(1),
-      avgT90: avgT90.toFixed(2),
-      totalClawbackMillions: totalClawbackMillions.toFixed(1),
-      secCorrelatedPct: Math.round((secCorrelatedCount / (total || 1)) * 100),
-      subordinatePct: Math.round((subordinateCount / (total || 1)) * 100),
-      avgTenure: avgTenure.toFixed(1),
-      avgAge: Math.round(avgAge),
+      totalCases: scandals.length,
+      totalClawbacks: Math.round(totalClawbacks),
+      totalDivorceBillions: totalDivorceBillions.toFixed(1),
+      subordinatePct,
+      oustedPct,
     };
   }, [scandals]);
 
-  // Sector Heatmap Aggregation
+  // Parse selected scandal's T-30 to T+90 stock series
+  const stockSeries: StockPoint[] = useMemo(() => {
+    if (!selectedScandal) return [];
+    try {
+      return JSON.parse(selectedScandal.stock_series_json);
+    } catch {
+      return [];
+    }
+  }, [selectedScandal]);
+
+  // Sector aggregation for Insights tab
   const sectorStats = useMemo(() => {
-    const map = new Map<
-      string,
-      { count: number; totalScore: number; totalT90: number; totalClawback: number }
-    >();
+    const map = new Map<string, { count: number; totalScore: number; totalT90: number }>();
     for (const s of scandals) {
-      const curr = map.get(s.sector) || {
-        count: 0,
-        totalScore: 0,
-        totalT90: 0,
-        totalClawback: 0,
-      };
+      const curr = map.get(s.sector) || { count: 0, totalScore: 0, totalT90: 0 };
       curr.count += 1;
       curr.totalScore += s.unfaithfulness_score;
       curr.totalT90 += s.stock_impact_t90_after;
-      curr.totalClawback += Math.abs(Math.min(0, s.parachute_or_clawback_millions));
       map.set(s.sector, curr);
     }
     return Array.from(map.entries())
       .map(([sector, d]) => ({
         sector,
         count: d.count,
-        avgScore: +(d.totalScore / d.count).toFixed(1),
+        avgScore: Math.round(d.totalScore / d.count),
         avgT90: +(d.totalT90 / d.count).toFixed(1),
-        totalClawback: +d.totalClawback.toFixed(1),
       }))
-      .sort((a, b) => b.avgScore - a.avgScore);
+      .sort((a, b) => b.count - a.count);
   }, [scandals]);
 
-  // "How They Got Caught" Breakdown
+  // Caught method aggregation for Insights tab
   const caughtBreakdown = useMemo(() => {
     const map = new Map<string, number>();
     for (const s of scandals) {
@@ -199,71 +193,8 @@ export default function TerminalDashboard({
       .sort((a, b) => b.count - a.count);
   }, [scandals]);
 
-  // "The Fallout Matrix" Consequence Breakdown
-  const consequenceBreakdown = useMemo(() => {
-    const map = new Map<string, { count: number; clawback: number }>();
-    for (const s of scandals) {
-      const curr = map.get(s.consequence) || { count: 0, clawback: 0 };
-      curr.count += 1;
-      curr.clawback += Math.abs(s.parachute_or_clawback_millions);
-      map.set(s.consequence, curr);
-    }
-    return Array.from(map.entries())
-      .map(([consequence, d]) => ({
-        consequence,
-        count: d.count,
-        pct: Math.round((d.count / (scandals.length || 1)) * 100),
-        clawback: +d.clawback.toFixed(1),
-      }))
-      .sort((a, b) => b.count - a.count);
-  }, [scandals]);
-
-  // Parse selected scandal's T-30 to T+90 stock series
-  const stockSeries: StockPoint[] = useMemo(() => {
-    if (!selectedScandal) return [];
-    try {
-      return JSON.parse(selectedScandal.stock_series_json);
-    } catch {
-      return [];
-    }
-  }, [selectedScandal]);
-
-  // Company Lookup "Safe to Work/Invest?" Badge result
-  const lookupBadgeResult = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return null;
-    const matches = scandals.filter(
-      (s) =>
-        s.ticker.toLowerCase().includes(q) ||
-        s.company_name.toLowerCase().includes(q) ||
-        s.executive_name.toLowerCase().includes(q)
-    );
-    if (matches.length === 0) {
-      return {
-        status: 'CLEAN',
-        label: 'NO C-SUITE INFIDELITY RECORD FOUND (2021–2026)',
-        color: 'text-emerald-400 border-emerald-500/50 bg-emerald-950/30',
-        matches: [],
-      };
-    }
-    const maxScore = Math.max(...matches.map((m) => m.unfaithfulness_score));
-    return {
-      status: maxScore >= 90 ? 'CRITICAL_HAZARD' : 'ELEVATED_RISK',
-      label:
-        maxScore >= 90
-          ? `GOVERNANCE HAZARD // PEAK SCORE ${maxScore}/100 (${matches.length} INCIDENT${matches.length > 1 ? 'S' : ''})`
-          : `ELEVATED RISK // SCORE ${maxScore}/100 (${matches.length} INCIDENT${matches.length > 1 ? 'S' : ''})`,
-      color:
-        maxScore >= 90
-          ? 'text-red-400 border-red-500/60 bg-red-950/40'
-          : 'text-amber-400 border-amber-500/60 bg-amber-950/40',
-      matches,
-    };
-  }, [searchQuery, scandals]);
-
-  // ETF Simulator 2021-2026 multi-year performance
+  // ETF Simulator 2021-2026
   const etfSimulationSeries = useMemo(() => {
-    // Annual cumulative multipliers from 2021 to 2026
     const years = [
       { year: '2021', spyMult: 1.0, shortAlphaMult: 1.0, longCheatersMult: 1.0 },
       { year: '2022', spyMult: 0.82, shortAlphaMult: 1.19, longCheatersMult: 0.74 },
@@ -284,26 +215,26 @@ export default function TerminalDashboard({
 
   const handleCopyReceipt = () => {
     if (!selectedScandal) return;
+    const cost = formatFinancialCost(selectedScandal);
     const receiptText = [
-      '============================================',
-      '   CHTR // GOLDEN PARACHUTE & CLAWBACK RECEIPT',
-      '============================================',
-      `COMPANY:      ${selectedScandal.company_name} (${selectedScandal.ticker})`,
-      `EXECUTIVE:    ${selectedScandal.executive_name} [${selectedScandal.role}]`,
-      `SCANDAL DATE: ${selectedScandal.incident_date}`,
-      `INDEX SCORE:  ${selectedScandal.unfaithfulness_score} / 100`,
-      `CAUGHT VIA:   ${selectedScandal.caught_method}`,
-      `OUTCOME:      ${selectedScandal.consequence}`,
-      `SEVERANCE/CLAWBACK: ${selectedScandal.parachute_or_clawback_millions < 0 ? `-$${Math.abs(selectedScandal.parachute_or_clawback_millions)}M FORFEITED/CLAWED BACK` : `$${selectedScandal.parachute_or_clawback_millions}M`}`,
-      `90D ALPHA:    ${selectedScandal.stock_impact_t90_after > 0 ? '+' : ''}${selectedScandal.stock_impact_t90_after}%`,
-      '--------------------------------------------',
-      `PR SPIN: "${selectedScandal.pr_euphemism}"`,
+      '========================================',
+      '   CHTR // EXECUTIVE FALLOUT RECEIPT',
+      '========================================',
+      `COMPANY:    ${selectedScandal.company_name} (${selectedScandal.ticker})`,
+      `EXECUTIVE:  ${selectedScandal.executive_name} (${selectedScandal.role})`,
+      `DATE:       ${selectedScandal.incident_date}`,
+      `SCORE:      ${selectedScandal.unfaithfulness_score}/100`,
+      `CAUGHT BY:  ${selectedScandal.caught_method}`,
+      `OUTCOME:    ${selectedScandal.consequence}`,
+      `COST:       ${cost.label}`,
+      `90D STOCK:  ${selectedScandal.stock_impact_t90_after >= 0 ? '+' : ''}${selectedScandal.stock_impact_t90_after}%`,
+      '----------------------------------------',
       `REALITY: "${selectedScandal.plain_english_translation}"`,
-      '============================================',
+      '========================================',
     ].join('\n');
     navigator.clipboard.writeText(receiptText);
     setCopiedReceipt(true);
-    setTimeout(() => setCopiedReceipt(false), 2500);
+    setTimeout(() => setCopiedReceipt(false), 2000);
   };
 
   const handleTipSubmit = async (e: React.FormEvent) => {
@@ -320,16 +251,14 @@ export default function TerminalDashboard({
       const data = await res.json();
       if (data.success && data.tips) {
         setTips(data.tips);
-        setTipSuccessMsg(
-          `TIP LOGGED TO SQLITE DB (ID #${data.created.id}) // QUEUED FOR VERIFICATION`
-        );
+        setTipSuccessMsg(`Saved to SQLite (#${data.created.id})`);
         setTipForm({
           company_name: '',
           ticker: '',
           executive_name: '',
           role: 'CEO',
           incident_date: '2026-11-09',
-          evidence_tier: 'REPORTED_MAJOR_MEDIA',
+          evidence_tier: 'CONFIRMED_OFFICIAL',
           source_url: '',
           notes: '',
         });
@@ -339,531 +268,407 @@ export default function TerminalDashboard({
     }
   };
 
-  const showSection = (section: 'INDEX' | 'ALPHA' | 'ANALYTICS' | 'VIRAL' | 'SUBMIT') =>
-    activeTab === 'ALL' || activeTab === section;
+  // Spotlight shortcuts for 1-click exploration
+  const spotlights = [
+    { label: 'Bill Gates ($76B Divorce)', ticker: 'MSFT', exec: 'Bill Gates' },
+    { label: 'Jeff Bezos ($38.3B Split)', ticker: 'AMZN', exec: 'Jeff Bezos' },
+    { label: 'Coldplay Kiss Cam CEO', ticker: 'ASTR-PVT', exec: 'Andy Byron' },
+    { label: 'McDonald’s (-$105M Clawback)', ticker: 'MCD', exec: 'Steve Easterbrook' },
+    { label: 'Kohl’s CEO (Fired in 100d)', ticker: 'KSS', exec: 'Ashley Buchanan' },
+  ];
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#06090e] text-slate-200">
-      {/* 1. LIVE BLOOMBERG-STYLE TICKER TAPE */}
-      <div className="bg-[#040609] border-b border-slate-800 py-1.5 overflow-hidden select-none">
-        <div className="animate-ticker flex items-center space-x-8 text-xs">
+    <div className="min-h-screen flex flex-col bg-[#09090b] text-zinc-100">
+      {/* SUBTLE TOP TICKER */}
+      <div className="bg-[#050506] border-b border-zinc-800 py-1.5 overflow-hidden select-none">
+        <div className="animate-ticker flex items-center space-x-6 text-xs font-mono-num">
           {[...scandals, ...scandals].map((item, idx) => (
             <button
               key={`${item.id}-${idx}`}
-              onClick={() => setSelectedScandalId(item.id)}
-              className="flex items-center space-x-2 hover:bg-slate-900 px-2 py-0.5 rounded transition cursor-pointer"
+              onClick={() => {
+                setSelectedScandalId(item.id);
+                setActiveTab('INDEX');
+              }}
+              className="flex items-center space-x-2 hover:bg-zinc-900 px-2 py-0.5 transition cursor-pointer"
             >
-              <span className="font-bold text-amber-400">{item.ticker}</span>
-              <span className="text-slate-400">{item.executive_name}</span>
-              <span className="px-1.5 py-0.2 bg-red-950/70 border border-red-800/60 text-red-400 font-semibold rounded">
-                IDX:{item.unfaithfulness_score}
-              </span>
+              <span className="font-bold text-yellow-400">{item.ticker}</span>
+              <span className="text-zinc-300">{item.executive_name}</span>
               <span
                 className={
                   item.stock_impact_t90_after >= 0
-                    ? 'text-emerald-400 font-semibold'
-                    : 'text-red-400 font-semibold'
+                    ? 'text-green-400'
+                    : 'text-red-400'
                 }
               >
-                90D: {item.stock_impact_t90_after >= 0 ? '+' : ''}
+                {item.stock_impact_t90_after >= 0 ? '+' : ''}
                 {item.stock_impact_t90_after}%
               </span>
-              <span className="text-slate-700">|</span>
+              <span className="text-zinc-700">/</span>
             </button>
           ))}
         </div>
       </div>
 
-      {/* 2. TOP TERMINAL COMMAND BAR */}
-      <header className="bg-[#0b1017] border-b border-slate-800 px-4 py-3 sticky top-0 z-30 shadow-lg">
-        <div className="max-w-[1600px] mx-auto flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <div className="h-9 w-9 rounded bg-amber-500/10 border border-amber-500/40 flex items-center justify-center text-amber-400">
-              <Activity className="w-5 h-5" />
+      {/* CLEAN HEADER & 4-TAB NAVIGATION */}
+      <header className="bg-[#111113] border-b border-zinc-800 sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs px-2 py-0.5 bg-yellow-400 text-black font-bold font-mono-num">
+                CHTR INDEX
+              </span>
+              <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                Corporate Infidelity Terminal
+              </h1>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs px-1.5 py-0.5 bg-amber-500 text-black font-bold tracking-wider">
-                  CHTR &lt;GO&gt;
-                </span>
-                <h1 className="text-sm sm:text-base font-bold tracking-tight text-white uppercase">
-                  Corporate C-Suite Infidelity &amp; Governance Index
-                </h1>
-                <span className="hidden sm:inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-700/50 text-emerald-400">
-                  <Database className="w-3 h-3" />LIVE ({scandals.length} CASES // 2021–2026)
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                TERMINAL FEED // TRACKING EXECUTIVE EXTRAMARITAL &amp; SUBORDINATE SCANDALS, CLAWBACKS, &amp; STOCK ALPHA
-              </p>
-            </div>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              Tracking C-Suite affairs, billionaire divorces, executive clawbacks &amp; 90-day stock impact
+            </p>
           </div>
 
-          {/* RIGHT SIDE: DAYS SINCE LAST SCANDAL + WORKSPACE FUNCTION KEYS */}
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2.5 bg-red-950/30 border border-red-500/40 px-3 py-1.5 rounded">
-              <Flame className="w-4 h-4 text-red-400 animate-pulse" />
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-red-300/80">
-                  Days Since Last Scandal
-                </div>
-                <div className="text-sm font-bold text-red-400">
-                  {daysSinceLastScandal} DAYS{' '}
-                  <span className="text-[11px] font-normal text-slate-400">
-                    (LAST: {scandals[0]?.ticker} // {scandals[0]?.incident_date})
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center bg-[#06090e] border border-slate-800 rounded p-0.5 text-xs">
-              {(
-                [
-                  { id: 'ALL', label: '[F1] ALL PANELS' },
-                  { id: 'INDEX', label: '[F2] LEADERBOARD' },
-                  { id: 'ALPHA', label: '[F3] AFFAIR ALPHA & ETF' },
-                  { id: 'ANALYTICS', label: '[F4] HEATMAPS & STATS' },
-                  { id: 'VIRAL', label: '[F5] RECEIPT & PR DECODER' },
-                  { id: 'SUBMIT', label: '[F6] TIP BOX (SQLITE)' },
-                ] as const
-              ).map((t) => (
+          {/* 4 CLEAN NAVIGATION TABS */}
+          <nav className="flex items-center bg-[#09090b] border border-zinc-800 text-xs sm:text-sm">
+            {(
+              [
+                { id: 'INDEX', label: '01 / Leaderboard & Dossier' },
+                { id: 'ALPHA', label: '02 / ETF Simulator & Alpha' },
+                { id: 'INSIGHTS', label: '03 / Stats & PR Decoder' },
+                { id: 'SUBMIT', label: `04 / Submit Tip (${tips.length})` },
+              ] as const
+            ).map((tab) => {
+              const active = activeTab === tab.id;
+              return (
                 <button
-                  key={t.id}
-                  onClick={() => setActiveTab(t.id)}
-                  className={`px-2.5 py-1 rounded transition cursor-pointer ${
-                    activeTab === t.id
-                      ? 'bg-amber-500 text-black font-bold'
-                      : 'text-slate-400 hover:text-white'
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-3.5 py-2 font-mono-num text-xs transition cursor-pointer border-r last:border-r-0 border-zinc-800 ${
+                    active
+                      ? 'bg-yellow-400 text-black font-bold'
+                      : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
                   }`}
                 >
-                  {t.label}
+                  <span>{tab.label}</span>
                 </button>
-              ))}
-            </div>
-          </div>
+              );
+            })}
+          </nav>
         </div>
       </header>
 
-      {/* MAIN TERMINAL CONTAINER */}
-      <main className="max-w-[1600px] w-full mx-auto px-4 py-4 space-y-5 flex-1">
-        {/* 3. MACRO KPI STRIP + COMPANY LOOKUP & "SAFE TO WORK/INVEST?" BADGE */}
-        <section className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-          {/* 6 KPI CARDS */}
-          <div className="lg:col-span-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-            <div className="bg-[#0b1017] border border-slate-800 p-3 rounded">
-              <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
-                <span>5Y Index Cases</span>
-                <Building2 className="w-3.5 h-3.5 text-amber-400" />
+      {/* MAIN WORKSPACE */}
+      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 flex-1 space-y-6">
+        {/* =========================================================
+            TAB 1: LEADERBOARD & EXECUTIVE DOSSIER (DEFAULT VIEW)
+           ========================================================= */}
+        {activeTab === 'INDEX' && (
+          <>
+            {/* 4 CLEAN SUMMARY METRICS */}
+            <div className="bg-[#111113] border border-zinc-800 grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 lg:divide-x divide-zinc-800">
+              <div className="p-4">
+                <div className="text-xs text-zinc-400 uppercase font-mono-num">
+                  Indexed Scandals
+                </div>
+                <div className="text-2xl font-bold text-white mt-1 font-mono-num">
+                  {summaryStats.totalCases} Cases
+                </div>
+                <div className="text-xs text-zinc-500 mt-1">
+                  Fortune 500, Big Tech &amp; Unicorns
+                </div>
               </div>
-              <div className="text-xl font-bold text-white mt-1">{macroStats.total}</div>
-              <div className="text-[10px] text-amber-400 mt-0.5">2021–2026 Verified</div>
+
+              <div className="p-4">
+                <div className="text-xs text-zinc-400 uppercase font-mono-num">
+                  Divorce &amp; Settlement Equity
+                </div>
+                <div className="text-2xl font-bold text-yellow-400 mt-1 font-mono-num">
+                  ${summaryStats.totalDivorceBillions}B+
+                </div>
+                <div className="text-xs text-zinc-500 mt-1">
+                  Led by Gates ($76B) &amp; Bezos ($38.3B)
+                </div>
+              </div>
+
+              <div className="p-4">
+                <div className="text-xs text-zinc-400 uppercase font-mono-num">
+                  Severance Clawed Back
+                </div>
+                <div className="text-2xl font-bold text-red-400 mt-1 font-mono-num">
+                  -${summaryStats.totalClawbacks}M
+                </div>
+                <div className="text-xs text-zinc-500 mt-1">
+                  Forfeited pay &amp; equity awards
+                </div>
+              </div>
+
+              <div className="p-4">
+                <div className="text-xs text-zinc-400 uppercase font-mono-num">
+                  Involved a Subordinate
+                </div>
+                <div className="text-2xl font-bold text-white mt-1 font-mono-num">
+                  {summaryStats.subordinatePct}%
+                </div>
+                <div className="text-xs text-zinc-500 mt-1">
+                  {summaryStats.oustedPct}% resulted in CEO/Exec exit
+                </div>
+              </div>
             </div>
 
-            <div className="bg-[#0b1017] border border-slate-800 p-3 rounded">
-              <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
-                <span>Mean Infidelity</span>
-                <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
-              </div>
-              <div className="text-xl font-bold text-red-400 mt-1">
-                {macroStats.avgScore}
-                <span className="text-xs text-slate-500">/100</span>
-              </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">
-                {macroStats.subordinatePct}% Subordinate
-              </div>
-            </div>
-
-            <div className="bg-[#0b1017] border border-slate-800 p-3 rounded">
-              <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
-                <span>Avg 90D Stock</span>
-                <TrendingDown className="w-3.5 h-3.5 text-red-400" />
-              </div>
-              <div
-                className={`text-xl font-bold mt-1 ${
-                  Number(macroStats.avgT90) >= 0 ? 'text-emerald-400' : 'text-red-400'
-                }`}
-              >
-                {Number(macroStats.avgT90) >= 0 ? '+' : ''}
-                {macroStats.avgT90}%
-              </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Post-Scandal Drift</div>
-            </div>
-
-            <div className="bg-[#0b1017] border border-slate-800 p-3 rounded">
-              <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
-                <span>Pay Clawed Back</span>
-                <DollarSign className="w-3.5 h-3.5 text-amber-400" />
-              </div>
-              <div className="text-xl font-bold text-amber-400 mt-1">
-                ${macroStats.totalClawbackMillions}M
-              </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Forfeited / Returned</div>
-            </div>
-
-            <div className="bg-[#0b1017] border border-slate-800 p-3 rounded">
-              <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
-                <span>SEC / Fraud Link</span>
-                <Scale className="w-3.5 h-3.5 text-cyan-400" />
-              </div>
-              <div className="text-xl font-bold text-cyan-400 mt-1">
-                {macroStats.secCorrelatedPct}%
-              </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Probe / 8-K Breach</div>
-            </div>
-
-            <div className="bg-[#0b1017] border border-slate-800 p-3 rounded">
-              <div className="text-[10px] text-slate-400 uppercase flex items-center justify-between">
-                <span>Avg Exec Profile</span>
-                <Users className="w-3.5 h-3.5 text-emerald-400" />
-              </div>
-              <div className="text-xl font-bold text-white mt-1">
-                {macroStats.avgAge}y{' '}
-                <span className="text-xs text-slate-400">/ {macroStats.avgTenure}yr</span>
-              </div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Age / Role Tenure</div>
-            </div>
-          </div>
-
-          {/* COMPANY LOOKUP & "SAFE TO WORK/INVEST?" BADGE GENERATOR */}
-          <div className="lg:col-span-4 bg-[#0b1017] border border-slate-800 p-3 rounded flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[11px] font-bold uppercase text-amber-400 flex items-center gap-1.5">
-                <Search className="w-3.5 h-3.5" /> Ticker Lookup &amp; &quot;Safe to Work/Invest?&quot; Badge
+            {/* FAMOUS CASE SPOTLIGHT PILLS */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-mono-num uppercase tracking-wider text-zinc-400 mr-1">
+                Famous Cases:
               </span>
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
-                >
-                  CLEAR
-                </button>
-              )}
-            </div>
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Type ticker, company, or CEO (e.g. NVDA, KSS, MCD, BP, AAPL)..."
-                className="w-full bg-[#06090e] border border-slate-700 focus:border-amber-500 rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 outline-none"
-              />
-            </div>
-            <div className="mt-2">
-              {lookupBadgeResult ? (
-                <div
-                  className={`text-[11px] px-2.5 py-1 border rounded font-semibold flex items-center justify-between ${lookupBadgeResult.color}`}
-                >
-                  <span>{lookupBadgeResult.label}</span>
-                  {lookupBadgeResult.matches[0] && (
-                    <button
-                      onClick={() => setSelectedScandalId(lookupBadgeResult.matches[0].id)}
-                      className="underline ml-2 text-[10px] cursor-pointer"
-                    >
-                      LOAD DOSSIER &rarr;
-                    </button>
-                  )}
-                </div>
-              ) : (
-                <div className="text-[11px] text-slate-400 flex items-center justify-between">
-                  <span>Instant due-diligence check across S&amp;P 500, NASDAQ &amp; Unicorns</span>
-                  <span className="text-emerald-400 font-semibold">READY</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </section>
-
-        {/* 4. CORE INFIDELITY INDEX LEADERBOARD + INTERACTIVE EXECUTIVE DOSSIER */}
-        {showSection('INDEX') && (
-          <section className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-            {/* LEFT 7 COLS: C-SUITE HALL OF SHAME LEADERBOARD */}
-            <div className="xl:col-span-7 bg-[#0b1017] border border-slate-800 rounded flex flex-col">
-              <div className="p-3 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Award className="w-4 h-4 text-amber-400" />
-                  <h2 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-white">
-                    C-Suite Hall of Shame // Infidelity Index Leaderboard (2021–2026)
-                  </h2>
-                </div>
-
-                {/* FILTER CONTROLS */}
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <Filter className="w-3.5 h-3.5 text-slate-400" />
-                  <select
-                    value={selectedYear}
-                    onChange={(e) => setSelectedYear(e.target.value)}
-                    className="bg-[#06090e] border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 outline-none"
+              {spotlights.map((sp) => {
+                const match = scandals.find(
+                  (s) => s.ticker === sp.ticker && s.executive_name.includes(sp.exec.split(' ')[1])
+                );
+                if (!match) return null;
+                const isSelected = selectedScandal?.id === match.id;
+                return (
+                  <button
+                    key={sp.label}
+                    onClick={() => setSelectedScandalId(match.id)}
+                    className={`text-xs px-3 py-1.5 border transition cursor-pointer font-mono-num ${
+                      isSelected
+                        ? 'bg-zinc-100 border-zinc-100 text-black font-bold'
+                        : 'bg-[#111113] border-zinc-800 text-zinc-300 hover:border-zinc-600'
+                    }`}
                   >
-                    <option value="ALL">ALL YEARS (2021-2026)</option>
-                    <option value="2026">2026</option>
-                    <option value="2025">2025</option>
-                    <option value="2024">2024</option>
-                    <option value="2023">2023</option>
-                    <option value="2022">2022</option>
-                    <option value="2021">2021</option>
-                  </select>
+                    {sp.label}
+                  </button>
+                );
+              })}
+            </div>
 
-                  <select
-                    value={selectedSector}
-                    onChange={(e) => setSelectedSector(e.target.value)}
-                    className="bg-[#06090e] border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 outline-none"
-                  >
-                    <option value="ALL">ALL SECTORS</option>
-                    <option value="Technology">Technology</option>
-                    <option value="Consumer & Retail">Consumer &amp; Retail</option>
-                    <option value="Energy & Industrials">Energy &amp; Industrials</option>
-                    <option value="Financials">Financials</option>
-                    <option value="Media & Entertainment">Media &amp; Entertainment</option>
-                    <option value="Sports & Entertainment">Sports &amp; Entertainment</option>
-                  </select>
+            {/* MAIN SPLIT VIEW: LEFT LEADERBOARD (7 COLS) + RIGHT DOSSIER (5 COLS) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              {/* LEFT: CLEAN, SCANNABLE LEADERBOARD */}
+              <div className="lg:col-span-7 bg-[#111113] border border-zinc-800">
+                {/* SEARCH & QUICK FILTER BAR */}
+                <div className="p-4 border-b border-zinc-800 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search company, ticker, or executive (e.g. Amazon, Bezos, Gates, MCD)..."
+                        className="w-full bg-[#09090b] border border-zinc-800 focus:border-yellow-400 px-3 pr-14 py-2 text-sm text-white placeholder-zinc-500 outline-none"
+                      />
+                      {searchQuery && (
+                        <button
+                          onClick={() => setSearchQuery('')}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono-num text-zinc-400 hover:text-white cursor-pointer"
+                        >
+                          CLEAR
+                        </button>
+                      )}
+                    </div>
+                  </div>
 
-                  <select
-                    value={selectedTier}
-                    onChange={(e) => setSelectedTier(e.target.value)}
-                    className="bg-[#06090e] border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 outline-none"
-                  >
-                    <option value="ALL">ALL EVIDENCE TIERS</option>
-                    <option value="CONFIRMED_OFFICIAL">CONFIRMED (8-K / BOARD)</option>
-                    <option value="REPORTED_MAJOR_MEDIA">REPORTED (MAJOR MEDIA)</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* TABLE */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-800 bg-[#080c12] text-[10px] text-slate-400 uppercase">
-                      <th className="py-2.5 px-3">Ticker / Company</th>
-                      <th className="py-2.5 px-3">Executive &amp; Weight</th>
-                      <th className="py-2.5 px-3">Date</th>
-                      <th className="py-2.5 px-3">Score</th>
-                      <th className="py-2.5 px-3">Multipliers</th>
-                      <th className="py-2.5 px-3">90D Alpha</th>
-                      <th className="py-2.5 px-3">Clawback</th>
-                      <th className="py-2.5 px-3">Tier</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/70">
-                    {filteredScandals.map((s) => {
-                      const isSelected = s.id === selectedScandal?.id;
-                      return (
-                        <tr
-                          key={s.id}
-                          onClick={() => setSelectedScandalId(s.id)}
-                          className={`cursor-pointer transition ${
-                            isSelected
-                              ? 'bg-amber-500/15 border-l-2 border-l-amber-400'
-                              : 'hover:bg-slate-900/70'
+                  {/* FILTER PILLS */}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {(
+                        [
+                          { id: 'ALL', label: `All (${scandals.length})` },
+                          { id: 'BILLIONAIRES', label: 'Billionaire Divorces' },
+                          { id: 'CLAWBACKS', label: 'Pay Clawbacks' },
+                          { id: 'RECENT', label: 'Recent (2023–2026)' },
+                          { id: 'VIRAL', label: 'Most Viral' },
+                        ] as const
+                      ).map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => setQuickFilter(f.id)}
+                          className={`px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer ${
+                            quickFilter === f.id
+                              ? 'bg-amber-500 text-black font-semibold'
+                              : 'bg-[#070a0f] text-slate-400 hover:text-white border border-slate-800'
                           }`}
                         >
-                          <td className="py-2.5 px-3">
-                            <div className="font-bold text-amber-400">{s.ticker}</div>
-                            <div className="text-[11px] text-slate-300 truncate max-w-[140px]">
-                              {s.company_name}
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-xs text-slate-400 font-mono-num">
+                      {filteredScandals.length} results
+                    </span>
+                  </div>
+                </div>
+
+                {/* STREAMLINED 5-COLUMN LIST */}
+                <div className="divide-y divide-slate-800/70 max-h-[640px] overflow-y-auto">
+                  {filteredScandals.map((s) => {
+                    const isSelected = s.id === selectedScandal?.id;
+                    const cost = formatFinancialCost(s);
+                    return (
+                      <div
+                        key={s.id}
+                        onClick={() => setSelectedScandalId(s.id)}
+                        className={`p-3.5 sm:px-4 flex items-center justify-between gap-3 cursor-pointer transition ${
+                          isSelected
+                            ? 'bg-amber-500/10 border-l-4 border-l-amber-400'
+                            : 'hover:bg-slate-800/40'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono-num text-xs font-bold px-1.5 py-0.5 rounded bg-slate-800 text-amber-400">
+                              {s.ticker}
+                            </span>
+                            <span className="font-semibold text-sm text-white truncate">
+                              {s.executive_name}
+                            </span>
+                            <span className="text-xs text-slate-400 hidden sm:inline">
+                              • {s.company_name}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-400">
+                            <span>{s.role}</span>
+                            <span>•</span>
+                            <span>{s.year}</span>
+                            <span>•</span>
+                            <span className="text-slate-300">{s.caught_method}</span>
+                          </div>
+                        </div>
+
+                        {/* RIGHT METRICS: FINANCIAL COST, 90D STOCK, SCORE */}
+                        <div className="flex items-center gap-3 sm:gap-4 shrink-0 text-right font-mono-num">
+                          <div className="hidden sm:block">
+                            <div className="text-xs font-semibold text-amber-300">
+                              {cost.short}
                             </div>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="font-semibold text-white">{s.executive_name}</div>
-                            <div className="text-[10px] text-slate-400">
-                              {s.role}{' '}
-                              <span className="text-amber-400 font-semibold">
-                                ({s.role_weight}x)
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
-                            {s.incident_date}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded font-bold ${
-                                s.unfaithfulness_score >= 90
-                                  ? 'bg-red-950/80 border border-red-700 text-red-400'
-                                  : 'bg-amber-950/80 border border-amber-700 text-amber-400'
+                            <div
+                              className={`text-[11px] ${
+                                s.stock_impact_t90_after >= 0
+                                  ? 'text-emerald-400'
+                                  : 'text-rose-400'
                               }`}
                             >
-                              {s.unfaithfulness_score}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <div className="flex flex-wrap gap-1">
-                              {s.involved_subordinate === 1 && (
-                                <span
-                                  title="Involved Subordinate / HR Power Imbalance"
-                                  className="px-1.5 py-0.5 text-[10px] rounded bg-purple-950/70 border border-purple-700/60 text-purple-300"
-                                >
-                                  SUBORD
-                                </span>
-                              )}
-                              {s.misused_company_funds === 1 && (
-                                <span
-                                  title="Company Funds / Vendor Conflict / Unrecorded NDA"
-                                  className="px-1.5 py-0.5 text-[10px] rounded bg-red-950/70 border border-red-700/60 text-red-300"
-                                >
-                                  $ FUNDS
-                                </span>
-                              )}
-                              {s.sec_or_fraud_correlation === 1 && (
-                                <span
-                                  title="SEC Enforcement / Financial Restatement / Governance Lawsuit"
-                                  className="px-1.5 py-0.5 text-[10px] rounded bg-cyan-950/70 border border-cyan-700/60 text-cyan-300"
-                                >
-                                  SEC/8-K
-                                </span>
-                              )}
+                              90D: {s.stock_impact_t90_after >= 0 ? '+' : ''}
+                              {s.stock_impact_t90_after}%
                             </div>
-                          </td>
-                          <td
-                            className={`py-2.5 px-3 font-bold whitespace-nowrap ${
-                              s.stock_impact_t90_after >= 0
-                                ? 'text-emerald-400'
-                                : 'text-red-400'
+                          </div>
+
+                          <div
+                            className={`w-11 h-11 rounded-lg flex flex-col items-center justify-center border ${
+                              s.unfaithfulness_score >= 92
+                                ? 'bg-rose-950/60 border-rose-700/70 text-rose-300'
+                                : 'bg-amber-950/60 border-amber-700/70 text-amber-300'
                             }`}
                           >
-                            {s.stock_impact_t90_after >= 0 ? '+' : ''}
-                            {s.stock_impact_t90_after}%
-                          </td>
-                          <td className="py-2.5 px-3 whitespace-nowrap font-semibold text-amber-300">
-                            {s.parachute_or_clawback_millions < 0
-                              ? `-$${Math.abs(s.parachute_or_clawback_millions)}M`
-                              : '—'}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            {s.evidence_tier === 'CONFIRMED_OFFICIAL' ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-700/60 text-emerald-300">
-                                <CheckCircle2 className="w-3 h-3" /> 8-K/BOARD
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-700/60 text-amber-300">
-                                <Eye className="w-3 h-3" /> MEDIA
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            <span className="text-sm font-bold leading-none">
+                              {s.unfaithfulness_score}
+                            </span>
+                            <span className="text-[9px] opacity-75 mt-0.5">IDX</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
-              <div className="p-2.5 border-t border-slate-800 bg-[#080c12] text-[11px] text-slate-400 flex items-center justify-between">
-                <span>
-                  CLICK ANY ROW TO INSPECT T-30 TO T+90 STOCK IMPACT, DOSSIER &amp; CLAWBACK RECEIPT
-                </span>
-                <span>
-                  SHOWING {filteredScandals.length} OF {scandals.length} RECORDS
-                </span>
-              </div>
-            </div>
-
-            {/* RIGHT 5 COLS: SELECTED CASE DOSSIER + T-30 TO T+90 STOCK CHART */}
-            {selectedScandal && (
-              <div className="xl:col-span-5 flex flex-col gap-4">
-                <div className="bg-[#0b1017] border border-slate-800 rounded p-4">
-                  <div className="flex items-start justify-between gap-2 border-b border-slate-800 pb-3">
+              {/* RIGHT: STICKY EXECUTIVE DOSSIER (FOCUSED & READABLE) */}
+              {selectedScandal && (
+                <div className="lg:col-span-5 bg-[#0d121b] border border-slate-800 rounded-xl p-5 lg:sticky lg:top-20 space-y-4">
+                  {/* DOSSIER HEADER */}
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-4">
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-0.5 bg-amber-500 text-black font-bold text-xs rounded">
+                        <span className="px-2 py-0.5 bg-amber-500 text-black font-bold text-xs rounded font-mono-num">
                           {selectedScandal.ticker}
                         </span>
                         <span className="text-xs text-slate-400">
-                          {selectedScandal.exchange} // {selectedScandal.sector}
-                        </span>
-                        <span className="text-xs px-1.5 py-0.5 rounded border border-slate-700 text-slate-300">
-                          MCAP: ${selectedScandal.market_cap_billions}B
+                          {selectedScandal.company_name} • {selectedScandal.incident_date}
                         </span>
                       </div>
-                      <h3 className="text-base font-bold text-white mt-1">
-                        {selectedScandal.company_name} — {selectedScandal.executive_name} (
-                        {selectedScandal.role})
-                      </h3>
+                      <h2 className="text-lg font-bold text-white mt-1.5">
+                        {selectedScandal.executive_name}
+                      </h2>
+                      <p className="text-xs text-slate-400">
+                        {selectedScandal.role} • Tenure: {selectedScandal.tenure_years} yrs (Age{' '}
+                        {selectedScandal.exec_age})
+                      </p>
                     </div>
 
-                    <div className="text-right">
-                      <div className="text-[10px] uppercase text-slate-400">
-                        Unfaithfulness Score
-                      </div>
-                      <div className="text-2xl font-black text-red-400">
+                    <div className="text-right shrink-0">
+                      <div className="text-[11px] text-slate-400">Infidelity Score</div>
+                      <div className="text-2xl font-black text-rose-400 font-mono-num">
                         {selectedScandal.unfaithfulness_score}
-                        <span className="text-xs text-slate-500">/100</span>
+                        <span className="text-xs text-slate-500 font-normal">/100</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* SUMMARY & METADATA */}
-                  <p className="text-xs text-slate-300 mt-3 leading-relaxed">
-                    {selectedScandal.summary}
-                  </p>
+                  {/* THE REALITY (PLAIN ENGLISH HIGHLIGHT) */}
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3.5">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-amber-400 mb-1">
+                      What Actually Happened
+                    </div>
+                    <p className="text-sm text-slate-100 leading-relaxed">
+                      {selectedScandal.plain_english_translation}
+                    </p>
+                  </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-xs">
-                    <div className="bg-[#06090e] border border-slate-800 p-2 rounded">
-                      <div className="text-[10px] text-slate-400">HOW CAUGHT</div>
-                      <div className="font-semibold text-amber-400 mt-0.5">
+                  {/* 3 KEY FALLOUT PILLS */}
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div className="bg-[#070a0f] border border-slate-800 rounded-lg p-2.5">
+                      <div className="text-[10px] uppercase text-slate-400">How Caught</div>
+                      <div className="text-xs font-semibold text-white mt-1">
                         {selectedScandal.caught_method}
                       </div>
                     </div>
-                    <div className="bg-[#06090e] border border-slate-800 p-2 rounded">
-                      <div className="text-[10px] text-slate-400">CONSEQUENCE</div>
-                      <div className="font-semibold text-white mt-0.5">
-                        {selectedScandal.consequence}
+                    <div className="bg-[#070a0f] border border-slate-800 rounded-lg p-2.5">
+                      <div className="text-[10px] uppercase text-slate-400">Fallout</div>
+                      <div className="text-xs font-semibold text-white mt-1">
+                        {selectedScandal.consequence.split(' (')[0]}
                       </div>
                     </div>
-                    <div className="bg-[#06090e] border border-slate-800 p-2 rounded">
-                      <div className="text-[10px] text-slate-400">CLAWBACK / PAYOUT</div>
-                      <div className="font-semibold text-red-400 mt-0.5">
-                        {selectedScandal.parachute_or_clawback_millions < 0
-                          ? `-$${Math.abs(selectedScandal.parachute_or_clawback_millions)}M Clawed Back`
-                          : '$0M Severance'}
-                      </div>
-                    </div>
-                    <div className="bg-[#06090e] border border-slate-800 p-2 rounded">
-                      <div className="text-[10px] text-slate-400">TENURE / AGE</div>
-                      <div className="font-semibold text-slate-200 mt-0.5">
-                        {selectedScandal.tenure_years} yrs // Age {selectedScandal.exec_age}
+                    <div className="bg-[#070a0f] border border-slate-800 rounded-lg p-2.5">
+                      <div className="text-[10px] uppercase text-slate-400">Financial Hit</div>
+                      <div className="text-xs font-semibold text-amber-400 mt-1 font-mono-num">
+                        {formatFinancialCost(selectedScandal).label}
                       </div>
                     </div>
                   </div>
 
-                  {/* STOCK PRICE IMPACT CHART (T-30 TO T+90) */}
-                  <div className="mt-4 bg-[#06090e] border border-slate-800 rounded p-3">
+                  {/* CLEAN STOCK IMPACT CHART (T-30 TO T+90) */}
+                  <div className="bg-[#070a0f] border border-slate-800 rounded-lg p-3.5">
                     <div className="flex items-center justify-between mb-2">
-                      <div className="text-xs font-bold uppercase text-white flex items-center gap-1.5">
-                        <BarChart3 className="w-3.5 h-3.5 text-amber-400" />
-                        Stock Price Impact Curve (T-30 to T+90 // Indexed T=0 = 100)
-                      </div>
-                      <div className="flex items-center gap-3 text-[11px]">
-                        <span className="flex items-center gap-1 text-amber-400 font-semibold">
-                          <span className="w-2.5 h-0.5 bg-amber-400 inline-block" />{' '}
-                          {selectedScandal.ticker}
-                        </span>
-                        <span className="flex items-center gap-1 text-cyan-400">
-                          <span className="w-2.5 h-0.5 bg-cyan-400 inline-block" /> S&amp;P 500
-                          (SPY)
-                        </span>
-                      </div>
+                      <span className="text-xs font-semibold text-slate-200">
+                        Stock Impact (30d Before → 90d After)
+                      </span>
+                      <span
+                        className={`text-xs font-bold font-mono-num ${
+                          selectedScandal.stock_impact_t90_after >= 0
+                            ? 'text-emerald-400'
+                            : 'text-rose-400'
+                        }`}
+                      >
+                        90D: {selectedScandal.stock_impact_t90_after >= 0 ? '+' : ''}
+                        {selectedScandal.stock_impact_t90_after}%
+                      </span>
                     </div>
 
-                    {/* SVG TERMINAL LINE CHART */}
                     {stockSeries.length > 0 && (
-                      <div className="w-full h-44 relative">
+                      <div className="w-full h-36">
                         {(() => {
                           const allVals = stockSeries.flatMap((p) => [p.stock, p.spy]);
                           const minVal = Math.min(...allVals) - 3;
                           const maxVal = Math.max(...allVals) + 3;
-                          const width = 520;
-                          const height = 150;
-                          const padX = 32;
-                          const padY = 16;
+                          const width = 460;
+                          const height = 130;
+                          const padX = 24;
+                          const padY = 14;
 
                           const toX = (i: number) =>
-                            padX +
-                            (i / (stockSeries.length - 1)) * (width - padX * 2);
+                            padX + (i / (stockSeries.length - 1)) * (width - padX * 2);
                           const toY = (v: number) =>
                             height -
                             padY -
-                            ((v - minVal) / (maxVal - minVal || 1)) *
-                              (height - padY * 2);
+                            ((v - minVal) / (maxVal - minVal || 1)) * (height - padY * 2);
 
                           const stockPath = stockSeries
                             .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${toX(i)} ${toY(pt.stock)}`)
@@ -880,71 +685,64 @@ export default function TerminalDashboard({
                               viewBox={`0 0 ${width} ${height}`}
                               className="w-full h-full overflow-visible"
                             >
-                              {/* Horizontal baseline T=0 (100) */}
                               <line
                                 x1={padX}
                                 y1={toY(100)}
                                 x2={width - padX}
                                 y2={toY(100)}
-                                stroke="#334155"
+                                stroke="#1e293b"
                                 strokeDasharray="3 3"
-                                strokeWidth="1"
                               />
-                              {/* Vertical Scandal Break Marker T=0 */}
                               <line
                                 x1={t0X}
-                                y1={padY / 2}
+                                y1={4}
                                 x2={t0X}
                                 y2={height - padY}
-                                stroke="#ef4444"
+                                stroke="#f43f5e"
                                 strokeDasharray="3 3"
                                 strokeWidth="1.5"
                               />
                               <text
                                 x={t0X + 4}
-                                y={padY + 4}
-                                fill="#f87171"
+                                y={12}
+                                fill="#fb7185"
                                 fontSize="9"
                                 fontWeight="bold"
                               >
-                                T=0 SCANDAL BREAK
+                                SCANDAL BREAKS
                               </text>
-
-                              {/* SPY Line */}
                               <path
                                 d={spyPath}
                                 fill="none"
-                                stroke="#06b6d4"
-                                strokeWidth="1.75"
-                                strokeOpacity="0.8"
+                                stroke="#38bdf8"
+                                strokeWidth="1.5"
+                                strokeOpacity="0.6"
                               />
-
-                              {/* Company Stock Line */}
                               <path
                                 d={stockPath}
                                 fill="none"
                                 stroke="#f59e0b"
                                 strokeWidth="2.5"
                               />
-
-                              {/* Data points and X labels */}
                               {stockSeries.map((pt, idx) => (
                                 <g key={pt.day}>
                                   <circle
                                     cx={toX(idx)}
                                     cy={toY(pt.stock)}
-                                    r="3"
+                                    r="2.5"
                                     fill="#f59e0b"
                                   />
-                                  <text
-                                    x={toX(idx)}
-                                    y={height - 2}
-                                    fill="#94a3b8"
-                                    fontSize="8.5"
-                                    textAnchor="middle"
-                                  >
-                                    {pt.day}
-                                  </text>
+                                  {(idx === 0 || idx === 4 || idx === stockSeries.length - 1) && (
+                                    <text
+                                      x={toX(idx)}
+                                      y={height - 1}
+                                      fill="#94a3b8"
+                                      fontSize="9"
+                                      textAnchor="middle"
+                                    >
+                                      {pt.day}
+                                    </text>
+                                  )}
                                 </g>
                               ))}
                             </svg>
@@ -952,118 +750,77 @@ export default function TerminalDashboard({
                         })()}
                       </div>
                     )}
-
-                    <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-slate-800/80 text-[11px]">
-                      <div>
-                        <span className="text-slate-400">30D Pre-Scandal: </span>
-                        <span
-                          className={
-                            selectedScandal.stock_impact_t30_before >= 0
-                              ? 'text-emerald-400 font-bold'
-                              : 'text-red-400 font-bold'
-                          }
-                        >
-                          {selectedScandal.stock_impact_t30_before >= 0 ? '+' : ''}
-                          {selectedScandal.stock_impact_t30_before}%
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400">7D Immediate Shock: </span>
-                        <span
-                          className={
-                            selectedScandal.stock_impact_t7_after >= 0
-                              ? 'text-emerald-400 font-bold'
-                              : 'text-red-400 font-bold'
-                          }
-                        >
-                          {selectedScandal.stock_impact_t7_after >= 0 ? '+' : ''}
-                          {selectedScandal.stock_impact_t7_after}%
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-400">90D Post-Scandal: </span>
-                        <span
-                          className={
-                            selectedScandal.stock_impact_t90_after >= 0
-                              ? 'text-emerald-400 font-bold'
-                              : 'text-red-400 font-bold'
-                          }
-                        >
-                          {selectedScandal.stock_impact_t90_after >= 0 ? '+' : ''}
-                          {selectedScandal.stock_impact_t90_after}%
-                        </span>
-                      </div>
-                    </div>
                   </div>
 
-                  {/* SEC / CORPORATE GOVERNANCE CORRELATION NOTE */}
-                  <div className="mt-3 p-2.5 rounded bg-cyan-950/25 border border-cyan-800/50 text-xs">
-                    <div className="text-[10px] font-bold uppercase text-cyan-400 flex items-center gap-1">
-                      <Gavel className="w-3.5 h-3.5" /> Corporate Governance &amp; SEC Enforcement
-                      Correlation
-                    </div>
-                    <div className="text-slate-300 mt-1">
-                      {selectedScandal.sec_correlation_note}
-                    </div>
-                    <div className="text-[10px] text-slate-400 mt-1">
-                      Source Verification: <span className="text-white">{selectedScandal.source_label}</span>
-                    </div>
+                  {/* OFFICIAL PR STATEMENT & RECEIPT BUTTON */}
+                  <div className="text-xs text-slate-400 bg-[#070a0f] border border-slate-800/80 rounded-lg p-3">
+                    <span className="font-semibold text-slate-300">Official PR Spin: </span>
+                    <span className="italic">&ldquo;{selectedScandal.pr_euphemism}&rdquo;</span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[11px] text-zinc-400 font-mono-num">
+                      SOURCE: {selectedScandal.source_label}
+                    </span>
+
+                    <button
+                      onClick={() => setShowReceiptModal(true)}
+                      className="px-3 py-1.5 bg-yellow-400 hover:bg-yellow-300 text-black font-bold text-xs font-mono-num transition cursor-pointer"
+                    >
+                      PRINT RECEIPT
+                    </button>
                   </div>
                 </div>
-              </div>
-            )}
-          </section>
+              )}
+            </div>
+          </>
         )}
 
-        {/* 5. FINANCIAL & STOCK MARKET CORRELATIONS ("THE AFFAIR ALPHA" & ETF SIMULATOR) */}
-        {showSection('ALPHA') && (
-          <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* SHORT THE CHEATERS ETF SIMULATOR */}
-            <div className="lg:col-span-7 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+        {/* =========================================================
+            TAB 2: ETF SIMULATOR & FINANCIAL ALPHA
+           ========================================================= */}
+        {activeTab === 'ALPHA' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* ETF SIMULATOR */}
+            <div className="lg:col-span-7 bg-[#0d121b] border border-slate-800 rounded-xl p-6 space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-emerald-400" />
-                    <h2 className="text-xs sm:text-sm font-bold uppercase text-white">
-                      &quot;Short the Cheaters&quot; ETF Simulator ($CHTR vs. SPY // 2021–2026)
-                    </h2>
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Backtested portfolio tracking an equal-weighted short/avoidance strategy on C-Suite Infidelity companies vs. S&amp;P 500
+                  <h2 className="text-base font-bold text-white">
+                    &ldquo;Short the Cheaters&rdquo; ETF Simulator ($CHTR vs. S&amp;P 500)
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    How an initial investment performs avoiding/shorting companies with C-suite governance scandals
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-[#070a0f] p-1 rounded-lg border border-slate-800 text-xs">
                   <button
                     onClick={() => setEtfStrategy('SHORT_CHEATERS')}
-                    className={`px-2.5 py-1 rounded text-xs cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-md font-semibold cursor-pointer ${
                       etfStrategy === 'SHORT_CHEATERS'
-                        ? 'bg-emerald-500 text-black font-bold'
-                        : 'bg-[#06090e] text-slate-400 border border-slate-800'
+                        ? 'bg-emerald-500 text-black'
+                        : 'text-slate-400'
                     }`}
                   >
-                    SHORT CHEATERS / LONG CLEAN
+                    Short Cheaters
                   </button>
                   <button
                     onClick={() => setEtfStrategy('LONG_CHEATERS')}
-                    className={`px-2.5 py-1 rounded text-xs cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-md font-semibold cursor-pointer ${
                       etfStrategy === 'LONG_CHEATERS'
-                        ? 'bg-red-500 text-black font-bold'
-                        : 'bg-[#06090e] text-slate-400 border border-slate-800'
+                        ? 'bg-rose-500 text-black'
+                        : 'text-slate-400'
                     }`}
                   >
-                    LONG CHEATERS BASKET
+                    Hold Cheaters
                   </button>
                 </div>
               </div>
 
-              {/* CAPITAL SLIDER & OUTPUT */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-3">
-                <div className="bg-[#06090e] border border-slate-800 p-3 rounded">
-                  <label className="text-[10px] text-slate-400 uppercase block">
-                    Initial Allocation (USD)
-                  </label>
-                  <div className="text-lg font-bold text-amber-400 mt-0.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-[#070a0f] border border-slate-800 p-4 rounded-xl">
+                  <div className="text-xs text-slate-400">Starting Investment</div>
+                  <div className="text-xl font-bold text-amber-400 font-mono-num mt-1">
                     ${etfCapital.toLocaleString()}
                   </div>
                   <input
@@ -1073,76 +830,60 @@ export default function TerminalDashboard({
                     step={1000}
                     value={etfCapital}
                     onChange={(e) => setEtfCapital(Number(e.target.value))}
-                    className="w-full accent-amber-500 mt-1 cursor-pointer"
+                    className="w-full accent-amber-500 mt-2 cursor-pointer"
                   />
                 </div>
 
-                <div className="bg-[#06090e] border border-slate-800 p-3 rounded">
-                  <div className="text-[10px] text-slate-400 uppercase">
-                    Strategy Terminal Value (2026)
-                  </div>
+                <div className="bg-[#070a0f] border border-slate-800 p-4 rounded-xl">
+                  <div className="text-xs text-slate-400">Strategy Value (2026)</div>
                   <div
-                    className={`text-lg font-bold mt-0.5 ${
-                      etfStrategy === 'SHORT_CHEATERS' ? 'text-emerald-400' : 'text-red-400'
+                    className={`text-xl font-bold font-mono-num mt-1 ${
+                      etfStrategy === 'SHORT_CHEATERS' ? 'text-emerald-400' : 'text-rose-400'
                     }`}
                   >
                     ${etfSimulationSeries[etfSimulationSeries.length - 1].strategy.toLocaleString()}
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1">
-                    {etfStrategy === 'SHORT_CHEATERS'
-                      ? '+134.0% Cumulative (Affair Alpha)'
-                      : '-11.0% Cumulative Drag'}
+                  <div className="text-xs text-slate-400 mt-1">
+                    {etfStrategy === 'SHORT_CHEATERS' ? '+134% Return' : '-11% Return'}
                   </div>
                 </div>
 
-                <div className="bg-[#06090e] border border-slate-800 p-3 rounded">
-                  <div className="text-[10px] text-slate-400 uppercase">
-                    S&amp;P 500 (SPY) Benchmark (2026)
-                  </div>
-                  <div className="text-lg font-bold text-cyan-400 mt-0.5">
+                <div className="bg-[#070a0f] border border-slate-800 p-4 rounded-xl">
+                  <div className="text-xs text-slate-400">S&amp;P 500 Benchmark</div>
+                  <div className="text-xl font-bold text-sky-400 font-mono-num mt-1">
                     ${etfSimulationSeries[etfSimulationSeries.length - 1].spy.toLocaleString()}
                   </div>
-                  <div className="text-[10px] text-slate-400 mt-1">
-                    +58.0% Benchmark Return
-                  </div>
+                  <div className="text-xs text-slate-400 mt-1">+58% Return</div>
                 </div>
               </div>
 
-              {/* BAR COMPARISON BY YEAR */}
-              <div className="grid grid-cols-6 gap-2 pt-2">
+              <div className="grid grid-cols-6 gap-3 pt-2">
                 {etfSimulationSeries.map((row) => {
                   const maxVal = etfCapital * 2.5;
-                  const stratHeight = Math.max(
-                    12,
-                    Math.round((row.strategy / maxVal) * 110)
-                  );
-                  const spyHeight = Math.max(12, Math.round((row.spy / maxVal) * 110));
+                  const stratH = Math.max(14, Math.round((row.strategy / maxVal) * 130));
+                  const spyH = Math.max(14, Math.round((row.spy / maxVal) * 130));
                   return (
                     <div
                       key={row.year}
-                      className="bg-[#06090e] border border-slate-800/80 rounded p-2 flex flex-col items-center"
+                      className="bg-[#070a0f] border border-slate-800/80 rounded-xl p-3 flex flex-col items-center"
                     >
-                      <div className="h-28 flex items-end gap-2 w-full justify-center">
+                      <div className="h-32 flex items-end gap-2 w-full justify-center">
                         <div
-                          style={{ height: `${stratHeight}px` }}
+                          style={{ height: `${stratH}px` }}
                           className={`w-4 rounded-t ${
                             etfStrategy === 'SHORT_CHEATERS'
                               ? 'bg-emerald-500'
-                              : 'bg-red-500'
+                              : 'bg-rose-500'
                           }`}
-                          title={`Strategy: $${row.strategy.toLocaleString()}`}
                         />
                         <div
-                          style={{ height: `${spyHeight}px` }}
-                          className="w-4 bg-cyan-500/80 rounded-t"
-                          title={`SPY: $${row.spy.toLocaleString()}`}
+                          style={{ height: `${spyH}px` }}
+                          className="w-4 bg-sky-500/80 rounded-t"
                         />
                       </div>
-                      <div className="text-[11px] font-bold text-white mt-1.5">
-                        {row.year}
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        ${Math.round(row.strategy / 1000)}k vs ${Math.round(row.spy / 1000)}k
+                      <div className="text-xs font-bold text-white mt-2">{row.year}</div>
+                      <div className="text-[11px] text-slate-400 font-mono-num">
+                        ${Math.round(row.strategy / 1000)}k
                       </div>
                     </div>
                   );
@@ -1150,408 +891,188 @@ export default function TerminalDashboard({
               </div>
             </div>
 
-            {/* DIVORCE / SETTLEMENT VS MARKET CAP & FRAUD CORRELATION METER */}
-            <div className="lg:col-span-5 bg-[#0b1017] border border-slate-800 rounded p-4 flex flex-col justify-between">
+            {/* BIGGEST DIVORCE & CLAWBACK RANKING */}
+            <div className="lg:col-span-5 bg-[#0d121b] border border-slate-800 rounded-xl p-6 space-y-4">
               <div>
-                <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
-                  <Scale className="w-4 h-4 text-cyan-400" />
-                  <h2 className="text-xs sm:text-sm font-bold uppercase text-white">
-                    Divorce Equity Dilution &amp; Corporate Fraud Correlation Meter
-                  </h2>
-                </div>
-
-                <div className="mt-3 space-y-2.5 text-xs">
-                  <div className="bg-[#06090e] border border-slate-800 p-3 rounded">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-amber-400">
-                        Academic &quot;Affair Alpha&quot; Thesis (Griffin, Kruger &amp; Maturana)
-                      </span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-700/60">
-                        VERIFIED EMPIRICAL LINK
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-slate-300 mt-1">
-                      Companies whose C-suite executives engage in undisclosed relationships or marital infidelity exhibit a{' '}
-                      <span className="text-white font-bold">2.4x higher rate</span> of SEC enforcement actions, financial restatements, or unrecorded vendor/NDA liabilities.
-                    </p>
-                  </div>
-
-                  {/* TOP EQUITY / CLAWBACK IMPACTS */}
-                  <div className="space-y-1.5">
-                    <div className="text-[10px] font-bold uppercase text-slate-400">
-                      Largest Divorce Transfers, Clawbacks &amp; Unrecorded Hush-Money Liabilities
-                    </div>
-                    {[
-                      {
-                        company: 'Microsoft (MSFT) // Bill Gates',
-                        amount: '$76,000M Divorce Equity Transfer',
-                        impact: '4.08% of Market Cap Reallocated (2021)',
-                      },
-                      {
-                        company: 'McDonald’s (MCD) // Steve Easterbrook',
-                        amount: '-$105.0M Severance Clawback + $400k SEC Fine',
-                        impact: 'Largest C-Suite Relationship Clawback in US History',
-                      },
-                      {
-                        company: 'BP (BP) // Bernard Looney',
-                        amount: '-$40.6M (£32.4M) Remuneration Forfeited',
-                        impact: 'Dismissed for Serious Misconduct (Misleading Board)',
-                      },
-                      {
-                        company: 'Kohl’s (KSS) // Ashley Buchanan',
-                        amount: '-$22.5M Signing Equity Forfeited',
-                        impact: 'Fired for Cause in 100 Days (Romantic Vendor Conflict)',
-                      },
-                      {
-                        company: 'WWE / TKO // Vince McMahon',
-                        amount: '$19.6M Unrecorded NDA Payments',
-                        impact: 'Triggered Multi-Year SEC Financial Restatements',
-                      },
-                    ].map((row) => (
-                      <div
-                        key={row.company}
-                        className="bg-[#06090e] border border-slate-800/80 px-3 py-2 rounded flex items-center justify-between"
-                      >
-                        <div>
-                          <div className="font-semibold text-white">{row.company}</div>
-                          <div className="text-[10px] text-slate-400">{row.impact}</div>
-                        </div>
-                        <div className="text-right font-bold text-amber-400 text-[11px]">
-                          {row.amount}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* 6. DEEP-DIVE STATISTICS & BREAKDOWNS (SECTOR HEATMAP, HOW CAUGHT, FALLOUT MATRIX) */}
-        {showSection('ANALYTICS') && (
-          <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* INDUSTRY SECTOR HEATMAP */}
-            <div className="lg:col-span-5 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                <h2 className="text-xs sm:text-sm font-bold uppercase text-white flex items-center gap-2">
-                  <Flame className="w-4 h-4 text-red-400" /> Industry Sector Infidelity Heatmap
+                <h2 className="text-base font-bold text-white">
+                  Largest Financial Fallouts in Corporate History
                 </h2>
-                <span className="text-[10px] text-slate-400">CLICK TO FILTER</span>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Billionaire divorce stock transfers &amp; board-enforced executive clawbacks
+                </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {sectorStats.map((sec) => {
-                  const active = selectedSector === sec.sector;
-                  return (
-                    <button
-                      key={sec.sector}
-                      onClick={() =>
-                        setSelectedSector(active ? 'ALL' : sec.sector)
-                      }
-                      className={`text-left p-3 rounded border transition cursor-pointer ${
-                        active
-                          ? 'bg-amber-500/20 border-amber-400'
-                          : 'bg-[#06090e] border-slate-800 hover:border-slate-600'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white">{sec.sector}</span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-950/80 border border-red-800 text-red-300 font-bold">
-                          {sec.count} CASES
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-baseline justify-between text-xs">
-                        <span className="text-slate-400">
-                          Avg Score:{' '}
-                          <strong className="text-amber-400">{sec.avgScore}</strong>
-                        </span>
-                        <span
-                          className={
-                            sec.avgT90 >= 0
-                              ? 'text-emerald-400 font-semibold'
-                              : 'text-red-400 font-semibold'
-                          }
-                        >
-                          90D: {sec.avgT90 >= 0 ? '+' : ''}
-                          {sec.avgT90}%
-                        </span>
-                      </div>
-                      <div className="mt-1.5 w-full bg-slate-900 h-1.5 rounded overflow-hidden">
-                        <div
-                          className="bg-gradient-to-r from-amber-500 to-red-500 h-full"
-                          style={{ width: `${sec.avgScore}%` }}
-                        />
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* HOW THEY GOT CAUGHT BREAKDOWN */}
-            <div className="lg:col-span-4 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                <h2 className="text-xs sm:text-sm font-bold uppercase text-white flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-amber-400" /> &quot;How They Got Caught&quot; Catalyst
-                </h2>
-                <span className="text-[10px] text-slate-400">% OF CASES</span>
-              </div>
-
-              <div className="space-y-3">
-                {caughtBreakdown.map((item) => (
-                  <div key={item.method} className="text-xs">
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-slate-200 font-medium">{item.method}</span>
-                      <span className="text-amber-400 font-bold">
-                        {item.count} ({item.pct}%)
-                      </span>
+              <div className="space-y-2.5">
+                {[
+                  {
+                    title: 'Bill Gates • Microsoft (MSFT)',
+                    sub: 'Board probe into engineer affair & 2021 divorce split',
+                    val: '$76.0B Divorce',
+                  },
+                  {
+                    title: 'Jeff Bezos • Amazon (AMZN)',
+                    sub: '4% of Amazon stock transferred following 2019 affair leak',
+                    val: '$38.3B Divorce',
+                  },
+                  {
+                    title: 'Sergey Brin & Drummond • Google (GOOGL)',
+                    sub: 'Divorce split + $310M shareholder lawsuit over executive affairs',
+                    val: '$8.8B Total',
+                  },
+                  {
+                    title: 'Steve Easterbrook • McDonald’s (MCD)',
+                    sub: 'Severance clawed back after forensic email probe + SEC fine',
+                    val: '-$105.0M Clawback',
+                  },
+                  {
+                    title: 'Brian Krzanich • Intel (INTC)',
+                    sub: 'Ousted for subordinate affair; forfeited unvested equity',
+                    val: '-$45.3M Forfeited',
+                  },
+                  {
+                    title: 'Bernard Looney • BP (BP)',
+                    sub: 'Dismissed for misleading board over colleague relationships',
+                    val: '-$40.6M Forfeited',
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.title}
+                    className="bg-[#070a0f] border border-slate-800 rounded-lg p-3 flex items-center justify-between gap-3"
+                  >
+                    <div>
+                      <div className="text-sm font-semibold text-white">{item.title}</div>
+                      <div className="text-xs text-slate-400">{item.sub}</div>
                     </div>
-                    <div className="w-full bg-[#06090e] border border-slate-800 h-2.5 rounded overflow-hidden">
-                      <div
-                        className="bg-amber-500 h-full"
-                        style={{ width: `${item.pct}%` }}
-                      />
+                    <div className="text-xs font-bold text-amber-400 font-mono-num shrink-0">
+                      {item.val}
                     </div>
                   </div>
                 ))}
               </div>
-
-              <div className="mt-4 p-2.5 bg-[#06090e] border border-slate-800 rounded text-[11px] text-slate-400">
-                <strong className="text-white">Key Insight:</strong> Internal Whistleblower
-                Hotlines (e.g., Nestlé’s <em>Speak Up</em>, RBC, BP) and Viral Public Sightings
-                (Astronomer Coldplay Kiss Cam, Try Guys NYC) account for the fastest board
-                terminations.
-              </div>
             </div>
-
-            {/* CONSEQUENCE TRACKER ("THE FALLOUT MATRIX") */}
-            <div className="lg:col-span-3 bg-[#0b1017] border border-slate-800 rounded p-4 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                  <h2 className="text-xs sm:text-sm font-bold uppercase text-white flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-red-400" /> The Fallout Matrix
-                  </h2>
-                </div>
-
-                <div className="space-y-2.5">
-                  {consequenceBreakdown.map((c) => (
-                    <div
-                      key={c.consequence}
-                      className="bg-[#06090e] border border-slate-800 p-2.5 rounded text-xs"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-white">{c.consequence}</span>
-                        <span className="px-1.5 py-0.5 bg-red-950 text-red-300 border border-red-800 rounded text-[10px] font-bold">
-                          {c.pct}%
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
-                        <span>{c.count} Executives</span>
-                        {c.clawback > 0 && (
-                          <span className="text-amber-400 font-semibold">
-                            -${c.clawback}M Forfeited
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-3 pt-2.5 border-t border-slate-800 text-[11px] text-slate-400">
-                <span className="text-emerald-400 font-bold">Zero-Tolerance Shift:</span>{' '}
-                87.5% of indexed executives since 2021 were either terminated for cause or
-                forced to resign and forfeit unvested equity.
-              </div>
-            </div>
-          </section>
+          </div>
         )}
 
-        {/* 7. INTERACTIVE & VIRAL FEATURES: GOLDEN PARACHUTE RECEIPT GENERATOR & PR RED FLAGS TRANSLATOR */}
-        {showSection('VIRAL') && (
-          <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* GOLDEN PARACHUTE / CLAWBACK RECEIPT GENERATOR */}
-            <div className="lg:col-span-5 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                <div className="flex items-center gap-2">
-                  <Receipt className="w-4 h-4 text-amber-400" />
-                  <h2 className="text-xs sm:text-sm font-bold uppercase text-white">
-                    &quot;Golden Parachute / Clawback&quot; Receipt Generator
-                  </h2>
-                </div>
-                <select
-                  value={selectedScandal?.id}
-                  onChange={(e) => setSelectedScandalId(Number(e.target.value))}
-                  className="bg-[#06090e] border border-slate-700 rounded px-2 py-1 text-xs text-amber-400 font-semibold outline-none"
-                >
-                  {scandals.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.ticker} — {s.executive_name}
-                    </option>
+        {/* =========================================================
+            TAB 3: STATS & CORPORATE PR DECODER
+           ========================================================= */}
+        {activeTab === 'INSIGHTS' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* HOW THEY GOT CAUGHT + SECTOR BREAKDOWN */}
+            <div className="lg:col-span-5 space-y-6">
+              <div className="bg-[#111113] border border-zinc-800 p-5 space-y-4">
+                <h2 className="text-base font-bold text-white border-b border-zinc-800 pb-2.5">
+                  How Executives Got Caught
+                </h2>
+                <div className="space-y-3">
+                  {caughtBreakdown.map((item) => (
+                    <div key={item.method}>
+                      <div className="flex justify-between text-xs mb-1">
+                        <span className="text-zinc-200 font-medium">{item.method}</span>
+                        <span className="text-yellow-400 font-bold font-mono-num">
+                          {item.count} cases ({item.pct}%)
+                        </span>
+                      </div>
+                      <div className="w-full bg-[#09090b] border border-zinc-800 h-2">
+                        <div
+                          className="bg-yellow-400 h-full"
+                          style={{ width: `${item.pct}%` }}
+                        />
+                      </div>
+                    </div>
                   ))}
-                </select>
+                </div>
               </div>
 
-              {selectedScandal && (
-                <div className="bg-[#05070b] border-2 border-dashed border-slate-700 rounded p-4 font-mono text-xs space-y-2">
-                  <div className="text-center border-b border-dashed border-slate-700 pb-2">
-                    <div className="text-amber-400 font-bold tracking-widest">
-                      *** CHTR GOVERNANCE TERMINAL RECEIPT ***
-                    </div>
-                    <div className="text-[10px] text-slate-400">
-                      AUDIT LOG #{selectedScandal.id}00{selectedScandal.year} //{' '}
-                      {selectedScandal.incident_date}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1 py-1 text-[11px]">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">ISSUER:</span>
-                      <span className="text-white font-bold">
-                        {selectedScandal.company_name} ({selectedScandal.ticker})
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">OFFICER:</span>
-                      <span className="text-white font-bold">
-                        {selectedScandal.executive_name} [{selectedScandal.role}]
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">TENURE PRIOR TO OUSTER:</span>
-                      <span className="text-slate-200">{selectedScandal.tenure_years} YEARS</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">DETECTION VECTOR:</span>
-                      <span className="text-amber-400">{selectedScandal.caught_method}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">SUBORDINATE / HR BREACH:</span>
-                      <span className="text-slate-200">
-                        {selectedScandal.involved_subordinate ? 'YES (DIRECT/STAFF)' : 'EXTERNAL / VENDOR'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="border-t border-b border-dashed border-slate-700 py-2 space-y-1">
-                    <div className="flex justify-between text-xs font-bold">
-                      <span className="text-slate-300">CLAWBACK / FORFEITED EQUITY:</span>
-                      <span className="text-red-400">
-                        {selectedScandal.parachute_or_clawback_millions < 0
-                          ? `-$${Math.abs(selectedScandal.parachute_or_clawback_millions).toFixed(1)}M USD`
-                          : '$0.0M (NO SEVERANCE)'}
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-[11px]">
-                      <span className="text-slate-400">90-DAY SHAREHOLDER ALPHA:</span>
-                      <span
-                        className={
-                          selectedScandal.stock_impact_t90_after >= 0
-                            ? 'text-emerald-400 font-bold'
-                            : 'text-red-400 font-bold'
-                        }
-                      >
-                        {selectedScandal.stock_impact_t90_after >= 0 ? '+' : ''}
-                        {selectedScandal.stock_impact_t90_after}%
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5 pt-1">
-                    <div className="text-[10px] text-slate-400 uppercase">
-                      Official 8-K / Board PR Statement:
-                    </div>
-                    <div className="text-[11px] italic text-slate-300 bg-slate-900/70 p-2 rounded">
-                      &ldquo;{selectedScandal.pr_euphemism}&rdquo;
-                    </div>
-                    <div className="text-[10px] text-amber-400 uppercase font-bold">
-                      Terminal Plain-English Translation:
-                    </div>
-                    <div className="text-[11px] text-white bg-amber-950/30 border border-amber-800/50 p-2 rounded">
-                      {selectedScandal.plain_english_translation}
-                    </div>
-                  </div>
-
-                  <div className="pt-2 flex justify-end">
-                    <button
-                      onClick={handleCopyReceipt}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs transition cursor-pointer"
+              <div className="bg-[#111113] border border-zinc-800 p-5 space-y-3">
+                <h2 className="text-base font-bold text-white border-b border-zinc-800 pb-2.5">
+                  Scandals by Industry Sector
+                </h2>
+                <div className="divide-y divide-zinc-800 border border-zinc-800 bg-[#09090b]">
+                  {sectorStats.map((sec) => (
+                    <div
+                      key={sec.sector}
+                      className="p-3 flex items-center justify-between"
                     >
-                      <Copy className="w-3.5 h-3.5" />
-                      {copiedReceipt ? 'RECEIPT COPIED TO CLIPBOARD!' : 'SHARE / COPY RECEIPT'}
-                    </button>
-                  </div>
+                      <div>
+                        <div className="text-sm font-semibold text-white">{sec.sector}</div>
+                        <div className="text-xs text-zinc-400">
+                          Avg Score: {sec.avgScore}/100
+                        </div>
+                      </div>
+                      <div className="text-right font-mono-num">
+                        <div className="text-xs font-bold text-yellow-400">
+                          {sec.count} Cases
+                        </div>
+                        <div
+                          className={`text-xs ${
+                            sec.avgT90 >= 0 ? 'text-green-400' : 'text-red-400'
+                          }`}
+                        >
+                          90D Avg: {sec.avgT90 >= 0 ? '+' : ''}
+                          {sec.avgT90}%
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              )}
+              </div>
             </div>
 
-            {/* PRE-ANNOUNCEMENT RED FLAGS & PR EUPHEMISM DECODER */}
-            <div className="lg:col-span-7 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-cyan-400" />
-                  <h2 className="text-xs sm:text-sm font-bold uppercase text-white">
-                    &quot;Pre-Announcement Red Flags&quot; &amp; Corporate PR Euphemism Decoder
-                  </h2>
-                </div>
-                <span className="text-[10px] text-cyan-400 font-semibold">
-                  SEC 8-KNLP LEXICON
-                </span>
+            {/* CORPORATE PR EUPHEMISM DECODER */}
+            <div className="lg:col-span-7 bg-[#111113] border border-zinc-800 p-5 space-y-4">
+              <div className="border-b border-zinc-800 pb-2.5">
+                <h2 className="text-base font-bold text-white">
+                  Corporate PR Euphemism Translator
+                </h2>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  How SEC Form 8-K filings and press releases disguise executive relationship scandals
+                </p>
               </div>
 
               <div className="space-y-3">
                 {redFlags.map((rf) => (
                   <div
                     key={rf.id}
-                    className="bg-[#06090e] border border-slate-800 rounded p-3 space-y-1.5"
+                    className="bg-[#070a0f] border border-slate-800 rounded-xl p-4 space-y-2"
                   >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-amber-400">
-                        {rf.euphemism}
-                      </span>
-                      <span className="text-[10px] px-2 py-0.5 rounded bg-red-950/80 border border-red-800 text-red-300 font-bold">
-                        {rf.risk_level}
-                      </span>
+                    <div className="text-sm font-semibold text-amber-400">
+                      {rf.euphemism}
                     </div>
-                    <div className="text-xs text-slate-200">
-                      <span className="text-emerald-400 font-bold uppercase text-[10px] mr-1.5">
-                        Plain English:
+                    <div className="text-sm text-slate-200">
+                      <span className="text-emerald-400 font-bold text-xs uppercase mr-2">
+                        Translation:
                       </span>
                       {rf.plain_english}
                     </div>
-                    <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-800/60">
-                      <span>Precedents: {rf.historical_example}</span>
-                      <span>Avg Clawback Lag: {rf.typical_lead_time_days}d</span>
+                    <div className="text-xs text-slate-400 pt-1 border-t border-slate-800/80 flex items-center justify-between">
+                      <span>Examples: {rf.historical_example}</span>
+                      <span className="text-rose-400 font-medium">{rf.risk_level}</span>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
-          </section>
+          </div>
         )}
 
-        {/* 8. COMMUNITY TIP BOX & SOURCE VERIFICATION QUEUE (LIVE SQLITE PERSISTENCE) */}
-        {showSection('SUBMIT') && (
-          <section className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* SUBMIT NEW SCANDAL TIP TO SQLITE */}
-            <div className="lg:col-span-6 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                <div className="flex items-center gap-2">
-                  <PlusCircle className="w-4 h-4 text-emerald-400" />
-                  <h2 className="text-xs sm:text-sm font-bold uppercase text-white">
-                    Community Tip Box &amp; Source Submission (Writes to SQLite DB)
-                  </h2>
-                </div>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700/60">
-                  EVIDENCE-GATED
-                </span>
-              </div>
+        {/* =========================================================
+            TAB 4: SUBMIT TIP TO SQLITE DATABASE
+           ========================================================= */}
+        {activeTab === 'SUBMIT' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-6 bg-[#0d121b] border border-slate-800 rounded-xl p-6">
+              <h2 className="text-base font-bold text-white mb-1">
+                Submit a Verified Corporate Scandal Tip
+              </h2>
+              <p className="text-xs text-slate-400 mb-4">
+                Submissions are saved directly to the local SQLite database (`data/cheating-index.db`).
+              </p>
 
-              <form onSubmit={handleTipSubmit} className="space-y-3 text-xs">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <form onSubmit={handleTipSubmit} className="space-y-3.5 text-sm">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="sm:col-span-2">
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
+                    <label className="text-xs text-slate-400 block mb-1">
                       Company Name *
                     </label>
                     <input
@@ -1562,28 +1083,24 @@ export default function TerminalDashboard({
                         setTipForm({ ...tipForm, company_name: e.target.value })
                       }
                       placeholder="e.g. Acme Corp"
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none focus:border-amber-500"
+                      className="w-full bg-[#070a0f] border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-500"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
-                      Ticker
-                    </label>
+                    <label className="text-xs text-slate-400 block mb-1">Ticker</label>
                     <input
                       type="text"
                       value={tipForm.ticker}
-                      onChange={(e) =>
-                        setTipForm({ ...tipForm, ticker: e.target.value })
-                      }
-                      placeholder="e.g. ACME"
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none focus:border-amber-500"
+                      onChange={(e) => setTipForm({ ...tipForm, ticker: e.target.value })}
+                      placeholder="ACME"
+                      className="w-full bg-[#070a0f] border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-500"
                     />
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
+                    <label className="text-xs text-slate-400 block mb-1">
                       Executive Name *
                     </label>
                     <input
@@ -1594,179 +1111,179 @@ export default function TerminalDashboard({
                         setTipForm({ ...tipForm, executive_name: e.target.value })
                       }
                       placeholder="Full Name"
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none focus:border-amber-500"
+                      className="w-full bg-[#070a0f] border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-500"
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
-                      Role
-                    </label>
+                    <label className="text-xs text-slate-400 block mb-1">Role</label>
                     <select
                       value={tipForm.role}
-                      onChange={(e) =>
-                        setTipForm({ ...tipForm, role: e.target.value })
-                      }
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none"
+                      onChange={(e) => setTipForm({ ...tipForm, role: e.target.value })}
+                      className="w-full bg-[#070a0f] border border-slate-700 rounded-lg px-3 py-2 text-white outline-none"
                     >
                       <option value="CEO">CEO (3x Weight)</option>
                       <option value="Founder / Board">Founder / Board (3x Weight)</option>
-                      <option value="CFO">CFO (2x Weight)</option>
-                      <option value="C-Suite / CLO / CPO">C-Suite / CLO / CPO (2x Weight)</option>
+                      <option value="CFO / C-Suite">CFO / C-Suite (2x Weight)</option>
                       <option value="VP / SVP">VP / SVP (1x Weight)</option>
                     </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
-                      Incident Date
-                    </label>
-                    <input
-                      type="date"
-                      value={tipForm.incident_date}
-                      onChange={(e) =>
-                        setTipForm({ ...tipForm, incident_date: e.target.value })
-                      }
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
-                      Evidence Tier Guardrail *
-                    </label>
-                    <select
-                      value={tipForm.evidence_tier}
-                      onChange={(e) =>
-                        setTipForm({ ...tipForm, evidence_tier: e.target.value })
-                      }
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none"
-                    >
-                      <option value="CONFIRMED_OFFICIAL">
-                        TIER 1: Confirmed Official (SEC 8-K / Board Release / Court Filing)
-                      </option>
-                      <option value="REPORTED_MAJOR_MEDIA">
-                        TIER 2: Reported by Major Media (WSJ / Bloomberg / FT / Reuters)
-                      </option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[10px] text-slate-400 uppercase block mb-1">
-                      Primary Source URL (8-K / News Link) *
-                    </label>
-                    <input
-                      type="url"
-                      required
-                      value={tipForm.source_url}
-                      onChange={(e) =>
-                        setTipForm({ ...tipForm, source_url: e.target.value })
-                      }
-                      placeholder="https://sec.gov/Archives/edgar/..."
-                      className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none focus:border-amber-500"
-                    />
                   </div>
                 </div>
 
                 <div>
-                  <label className="text-[10px] text-slate-400 uppercase block mb-1">
-                    Governance &amp; Fallout Notes
+                  <label className="text-xs text-slate-400 block mb-1">
+                    Source Link (SEC 8-K or Major Financial Outlet) *
                   </label>
                   <input
-                    type="text"
-                    value={tipForm.notes}
+                    type="url"
+                    required
+                    value={tipForm.source_url}
                     onChange={(e) =>
-                      setTipForm({ ...tipForm, notes: e.target.value })
+                      setTipForm({ ...tipForm, source_url: e.target.value })
                     }
-                    placeholder="Brief summary of board action, subordinate policy violation, or severance clawback..."
-                    className="w-full bg-[#06090e] border border-slate-700 rounded px-2.5 py-1.5 text-white outline-none focus:border-amber-500"
+                    placeholder="https://..."
+                    className="w-full bg-[#070a0f] border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-500"
                   />
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[10px] text-slate-400 flex items-center gap-1">
-                    <Lock className="w-3 h-3 text-amber-400" /> Unverified rumors without SEC or major media citations are rejected.
-                  </span>
-                  <button
-                    type="submit"
-                    disabled={submittingTip}
-                    className="px-4 py-1.5 rounded bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs transition cursor-pointer"
-                  >
-                    {submittingTip ? 'WRITING TO SQLITE...' : 'SUBMIT TO SQLITE QUEUE'}
-                  </button>
+                <div>
+                  <label className="text-xs text-slate-400 block mb-1">Summary Notes</label>
+                  <input
+                    type="text"
+                    value={tipForm.notes}
+                    onChange={(e) => setTipForm({ ...tipForm, notes: e.target.value })}
+                    placeholder="What happened and what was the board fallout?"
+                    className="w-full bg-[#070a0f] border border-slate-700 rounded-lg px-3 py-2 text-white outline-none focus:border-amber-500"
+                  />
                 </div>
 
+                <button
+                  type="submit"
+                  disabled={submittingTip}
+                  className="w-full py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-black font-bold text-sm transition cursor-pointer"
+                >
+                  {submittingTip ? 'Saving to SQLite...' : 'Submit Tip'}
+                </button>
+
                 {tipSuccessMsg && (
-                  <div className="p-2 rounded bg-emerald-950/60 border border-emerald-600 text-emerald-300 text-xs font-semibold">
+                  <div className="p-3 rounded-lg bg-emerald-950/60 border border-emerald-600 text-emerald-300 text-xs font-semibold">
                     {tipSuccessMsg}
                   </div>
                 )}
               </form>
             </div>
 
-            {/* LIVE SQLITE MODERATION & VERIFICATION LOG */}
-            <div className="lg:col-span-6 bg-[#0b1017] border border-slate-800 rounded p-4">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-amber-400" />
-                  <h2 className="text-xs sm:text-sm font-bold uppercase text-white">
-                    SQLite Verification Queue (`community_tips` Table)
-                  </h2>
-                </div>
-                <span className="text-[10px] text-slate-400">
-                  {tips.length} LOGGED SUBMISSIONS
-                </span>
-              </div>
-
-              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+            <div className="lg:col-span-6 bg-[#0d121b] border border-slate-800 rounded-xl p-6 space-y-3">
+              <h2 className="text-base font-bold text-white">
+                Recent Community Submissions ({tips.length})
+              </h2>
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {tips.map((t) => (
                   <div
                     key={t.id}
-                    className="bg-[#06090e] border border-slate-800 p-3 rounded text-xs space-y-1"
+                    className="bg-[#070a0f] border border-slate-800 rounded-xl p-3.5 space-y-1"
                   >
                     <div className="flex items-center justify-between">
-                      <div className="font-bold text-white">
-                        <span className="text-amber-400 mr-1.5">[{t.ticker}]</span>
-                        {t.company_name} — {t.executive_name} ({t.role})
-                      </div>
-                      <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
-                          t.status === 'VERIFIED_MERGED'
-                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
-                            : 'bg-amber-950 text-amber-300 border border-amber-700/60'
-                        }`}
-                      >
+                      <span className="font-semibold text-sm text-white">
+                        <span className="text-amber-400 font-mono-num mr-1.5">
+                          [{t.ticker}]
+                        </span>
+                        {t.company_name} — {t.executive_name}
+                      </span>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-700/60 font-semibold">
                         {t.status}
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-300">{t.notes}</div>
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1">
-                      <span>
-                        Tier: <strong className="text-slate-300">{t.evidence_tier}</strong> // Incident: {t.incident_date}
-                      </span>
-                      <span className="truncate max-w-[220px] text-cyan-400">
-                        {t.source_url}
-                      </span>
-                    </div>
+                    <p className="text-xs text-slate-300">{t.notes}</p>
                   </div>
                 ))}
               </div>
             </div>
-          </section>
+          </div>
         )}
       </main>
 
-      {/* TERMINAL FOOTER */}
-      <footer className="bg-[#040609] border-t border-slate-800 px-4 py-3 mt-6 text-[11px] text-slate-500">
-        <div className="max-w-[1600px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div>
-            CHTR TERMINAL v4.2 // DATA BACKEND: NODE:SQLITE (`data/cheating-index.db`) //
-            EVIDENCE TIERS: SEC FORM 8-K, OFFICIAL BOARD DISCLOSURES &amp; MAJOR FINANCIAL PRESS
-          </div>
-          <div className="text-slate-400">
-            FOR GOVERNANCE RESEARCH &amp; ALTERNATIVE DATA ANALYTICS ONLY
+      {/* MODAL: SHAREABLE GOLDEN PARACHUTE / CLAWBACK RECEIPT */}
+      {showReceiptModal && selectedScandal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4"
+          onClick={() => setShowReceiptModal(false)}
+        >
+          <div
+            className="bg-[#111113] border border-zinc-700 max-w-md w-full p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <span className="text-xs font-bold uppercase font-mono-num text-yellow-400">
+                Executive Fallout Receipt
+              </span>
+              <button
+                onClick={() => setShowReceiptModal(false)}
+                className="text-xs font-mono-num text-zinc-400 hover:text-white cursor-pointer"
+              >
+                [CLOSE]
+              </button>
+            </div>
+
+            <div className="bg-[#09090b] border border-dashed border-zinc-700 p-4 font-mono-num text-xs space-y-2">
+              <div className="text-center border-b border-dashed border-zinc-800 pb-2">
+                <div className="font-bold text-white">
+                  {selectedScandal.company_name} ({selectedScandal.ticker})
+                </div>
+                <div className="text-zinc-400">
+                  {selectedScandal.executive_name} / {selectedScandal.role}
+                </div>
+              </div>
+
+              <div className="space-y-1.5 py-1">
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">SCANDAL DATE:</span>
+                  <span className="text-white">{selectedScandal.incident_date}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">INFIDELITY SCORE:</span>
+                  <span className="text-red-400 font-bold">
+                    {selectedScandal.unfaithfulness_score} / 100
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">CAUGHT BY:</span>
+                  <span className="text-yellow-400">{selectedScandal.caught_method}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">FINANCIAL FALLOUT:</span>
+                  <span className="text-white font-bold">
+                    {formatFinancialCost(selectedScandal).label}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-zinc-400">90D STOCK IMPACT:</span>
+                  <span
+                    className={
+                      selectedScandal.stock_impact_t90_after >= 0
+                        ? 'text-green-400 font-bold'
+                        : 'text-red-400 font-bold'
+                    }
+                  >
+                    {selectedScandal.stock_impact_t90_after >= 0 ? '+' : ''}
+                    {selectedScandal.stock_impact_t90_after}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="border-t border-dashed border-zinc-800 pt-2 text-zinc-300 font-sans">
+                {selectedScandal.plain_english_translation}
+              </div>
+            </div>
+
+            <button
+              onClick={handleCopyReceipt}
+              className="w-full py-2.5 bg-yellow-400 hover:bg-yellow-300 text-black font-bold text-xs font-mono-num uppercase transition cursor-pointer"
+            >
+              {copiedReceipt ? 'COPIED TO CLIPBOARD' : 'COPY SHAREABLE RECEIPT'}
+            </button>
           </div>
         </div>
-      </footer>
+      )}
     </div>
   );
 }
